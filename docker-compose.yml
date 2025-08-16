@@ -1,0 +1,182 @@
+version: '3.8'
+
+services:
+  # Wazuh Manager
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.7.0
+    hostname: wazuh-manager
+    restart: always
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 655360
+        hard: 655360
+    ports:
+      - "1514:1514"     # Wazuh agent enrollment
+      - "1515:1515"     # Wazuh agent events
+      - "514:514/udp"   # Syslog
+      - "55000:55000"   # Wazuh API
+    environment:
+      - INDEXER_URL=https://wazuh-indexer:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=SecretPassword
+      - FILEBEAT_SSL_VERIFICATION_MODE=full
+      - SSL_CERTIFICATE_AUTHORITIES=/etc/ssl/root-ca.pem
+      - SSL_CERTIFICATE=/etc/ssl/filebeat.pem
+      - SSL_KEY=/etc/ssl/filebeat.key
+      - API_USERNAME=wazuh-wui
+      - API_PASSWORD=MyS3cr37P450r.*-
+    volumes:
+      - wazuh_api_configuration:/var/ossec/api/configuration
+      - wazuh_etc:/var/ossec/etc
+      - wazuh_logs:/var/ossec/logs
+      - wazuh_queue:/var/ossec/queue
+      - wazuh_var_multigroups:/var/ossec/var/multigroups
+      - wazuh_integrations:/var/ossec/integrations
+      - wazuh_active_response:/var/ossec/active-response/bin
+      - wazuh_agentless:/var/ossec/agentless
+      - wazuh_wodles:/var/ossec/wodles
+      - filebeat_etc:/etc/filebeat
+      - filebeat_var:/var/lib/filebeat
+      - ./config/wazuh_cluster.key:/var/ossec/etc/authd.pass
+    depends_on:
+      - wazuh-indexer
+    networks:
+      - wazuh
+
+  # Wazuh Indexer (OpenSearch)
+  wazuh-indexer:
+    image: wazuh/wazuh-indexer:4.7.0
+    hostname: wazuh-indexer
+    restart: always
+    ports:
+      - "9200:9200"
+    environment:
+      - "OPENSEARCH_JAVA_OPTS=-Xms1024m -Xmx1024m"
+      - "bootstrap.memory_lock=true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - wazuh-indexer-data:/var/lib/wazuh-indexer
+      - ./config/wazuh-indexer/opensearch.yml:/usr/share/wazuh-indexer/config/opensearch.yml
+      - ./config/wazuh-indexer/internal_users.yml:/usr/share/wazuh-indexer/config/opensearch-security/internal_users.yml
+    networks:
+      - wazuh
+
+  # Wazuh Dashboard
+  wazuh-dashboard:
+    image: wazuh/wazuh-dashboard:4.7.0
+    hostname: wazuh-dashboard
+    restart: always
+    ports:
+      - "443:5601"
+    environment:
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=SecretPassword
+      - WAZUH_API_URL=https://wazuh-manager
+      - DASHBOARD_USERNAME=kibanaserver
+      - DASHBOARD_PASSWORD=kibanaserver
+      - API_USERNAME=wazuh-wui
+      - API_PASSWORD=MyS3cr37P450r.*-
+    volumes:
+      - ./config/wazuh-dashboard/opensearch_dashboards.yml:/usr/share/wazuh-dashboard/config/opensearch_dashboards.yml
+      - ./config/wazuh-dashboard/wazuh.yml:/usr/share/wazuh-dashboard/data/wazuh/config/wazuh.yml
+    depends_on:
+      - wazuh-indexer
+      - wazuh-manager
+    networks:
+      - wazuh
+
+  # Filebeat
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.10.2
+    hostname: filebeat
+    restart: always
+    user: root
+    command: ["--strict.perms=false"]
+    volumes:
+      - ./config/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/log:/var/log:ro
+      - filebeat_data:/usr/share/filebeat/data
+    environment:
+      - ELASTICSEARCH_HOST=wazuh-indexer:9200
+      - ELASTICSEARCH_USERNAME=admin
+      - ELASTICSEARCH_PASSWORD=SecretPassword
+    depends_on:
+      - wazuh-indexer
+    networks:
+      - wazuh
+
+  # Cloud Custodian
+  cloud-custodian:
+    image: cloudcustodian/c7n:latest
+    hostname: cloud-custodian
+    restart: always
+    volumes:
+      - ./config/custodian:/home/custodian/policies
+      - ./logs/custodian:/home/custodian/logs
+      - custodian_cache:/home/custodian/.cache
+      - aws_credentials:/home/custodian/.aws:ro
+    environment:
+      - AWS_DEFAULT_REGION=us-east-1
+      - C7N_LOG_LEVEL=INFO
+    working_dir: /home/custodian
+    command: >
+      sh -c "
+        echo 'Starting Cloud Custodian scheduler...' &&
+        while true; do
+          echo 'Running policy validation...' &&
+          custodian validate /home/custodian/policies/*.yml &&
+          echo 'Running policies...' &&
+          custodian run /home/custodian/policies/*.yml --output-dir /home/custodian/logs &&
+          echo 'Waiting 1 hour before next run...' &&
+          sleep 3600
+        done
+      "
+    networks:
+      - wazuh
+
+  # Log aggregator for centralized logging
+  rsyslog:
+    image: rsyslog/rsyslog_base_ubuntu:8.2001.0-ubuntu20.04.1
+    hostname: rsyslog-server
+    restart: always
+    ports:
+      - "514:514/udp"
+      - "514:514/tcp"
+    volumes:
+      - ./config/rsyslog/rsyslog.conf:/etc/rsyslog.conf
+      - rsyslog_logs:/var/log
+    networks:
+      - wazuh
+
+volumes:
+  wazuh_api_configuration:
+  wazuh_etc:
+  wazuh_logs:
+  wazuh_queue:
+  wazuh_var_multigroups:
+  wazuh_integrations:
+  wazuh_active_response:
+  wazuh_agentless:
+  wazuh_wodles:
+  filebeat_etc:
+  filebeat_var:
+  filebeat_data:
+  wazuh-indexer-data:
+  custodian_cache:
+  aws_credentials:
+  rsyslog_logs:
+
+networks:
+  wazuh:
+    driver: bridge

@@ -1,0 +1,71 @@
+policies:
+  - name: ec2-unencrypted-volumes
+    resource: aws.ec2
+    description: |
+      Find EC2 instances with unencrypted EBS volumes
+    filters:
+      - type: ebs
+        key: Encrypted
+        value: false
+    actions:
+      - type: notify
+        template: default.html
+        priority_header: 1
+        subject: "EC2 Instance with Unencrypted Volume - [custodian {{ account }} - {{ region }}]"
+        to:
+          - security@company.com
+        transport:
+          type: sqs
+          queue: https://sqs.us-east-1.amazonaws.com/123456789012/custodian-mailer
+
+  - name: s3-bucket-public-read
+    resource: aws.s3
+    description: |
+      Find S3 buckets with public read access
+    filters:
+      - type: bucket-policy
+        key: 'Statement[].Principal'
+        value: '*'
+      - type: bucket-policy
+        key: 'Statement[].Effect'
+        value: 'Allow'
+    actions:
+      - type: notify
+        template: default.html
+        priority_header: 1
+        subject: "S3 Bucket with Public Read Access - [custodian {{ account }} - {{ region }}]"
+        to:
+          - security@company.com
+
+  - name: security-group-ssh-open
+    resource: aws.security-group
+    description: |
+      Find security groups with SSH (22) open to the world
+    filters:
+      - type: ingress
+        Ports: [22]
+        Cidr:
+          value: "0.0.0.0/0"
+    actions:
+      - type: notify
+        template: default.html
+        priority_header: 1
+        subject: "Security Group with SSH Open to World - [custodian {{ account }} - {{ region }}]"
+        to:
+          - security@company.com
+
+  - name: unused-security-groups
+    resource: aws.security-group
+    description: |
+      Find unused security groups (not attached to any resources)
+    filters:
+      - "GroupName": default
+        type: used
+        value: false
+    actions:
+      - type: notify
+        template: default.html
+        priority_header: 2
+        subject: "Unused Security Groups Found - [custodian {{ account }} - {{ region }}]"
+        to:
+          - admin@company.com
