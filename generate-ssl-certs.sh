@@ -27,3 +27,19 @@ echo "Private Key: config/nginx/ssl/nginx.key"
 echo ""
 echo "Note: These are self-signed certificates for development."
 echo "For production, use certificates from a trusted CA."
+
+
+
+
+
+
+
+# Generate private key
+openssl genrsa -out filebeat.key 2048
+
+# Generate a certificate signing request (CSR)
+openssl req -new -key filebeat.key -out filebeat.csr \
+  -subj "/C=US/ST=State/L=City/O=MyOrg/OU=Security/CN=filebeat"
+
+# Generate a self-signed certificate (valid for 365 days)
+openssl x509 -req -days 365 -in filebeat.csr -signkey filebeat.key -out filebeat.crt
